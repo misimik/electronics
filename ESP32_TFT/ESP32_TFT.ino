@@ -1,10 +1,10 @@
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 #include <SPI.h>
-/*If you want to use the LVGL examples,
-  make sure to install the lv_examples Arduino library
-  and uncomment the following line.
-#include <lv_examples.h>
+#include <ESP32Encoder.h>
+/* LVGL library might have breaking changes in updates.
+ *  Make sure that the the code is in agreement with current
+ *  display and input device porting requirements
 */
 
 /*Change to your screen resolution*/
@@ -14,16 +14,18 @@ static const uint16_t screenHeight = 240;
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t buf[ screenWidth * 10 ];
 
+ESP32Encoder encoder;
+const int buttonPin = 33;
+const int encoderPinA = 2;
+const int encoderPinB = 15;
+const int TECpin    = 21;
+
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight); /* TFT instance */
 
-#if LV_USE_LOG != 0
-/* Serial debugging */
-void my_print(const char * buf)
-{
-    Serial.printf(buf);
-    Serial.flush();
-}
-#endif
+static lv_obj_t * TEClabel;
+
+/* Global variables */
+static bool TECStatus = false;
 
 /* Display flushing */
 void my_disp_flush( lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p )
@@ -35,54 +37,55 @@ void my_disp_flush( lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *colo
     tft.setAddrWindow( area->x1, area->y1, w, h );
     tft.pushColors( ( uint16_t * )&color_p->full, w * h, true );
     tft.endWrite();
-
+    
     lv_disp_flush_ready( disp );
 }
-
-///*Read the touchpad*/
-//void my_touchpad_read( lv_indev_drv_t * indev_driver, lv_indev_data_t * data )
-//{
-//    uint16_t touchX, touchY;
-//
-//    bool touched = tft.getTouch( &touchX, &touchY, 600 );
-//
-//    if( !touched )
-//    {
-//        data->state = LV_INDEV_STATE_REL;
-//    }
-//    else
-//    {
-//        data->state = LV_INDEV_STATE_PR;
-//
-//        /*Set the coordinates*/
-//        data->point.x = touchX;
-//        data->point.y = touchY;
-//
-//        Serial.print( "Data x " );
-//        Serial.println( touchX );
-//
-//        Serial.print( "Data y " );
-//        Serial.println( touchY );
-//    }
-//}
 
 /* Reading input device (simulated encoder here) */
 void read_encoder(lv_indev_drv_t * indev, lv_indev_data_t * data)
 {
     static int32_t last_diff = 0;
-    int32_t diff = 0; /* Dummy - no movement */
-//    int btn_state = LV_INDEV_STATE_REL; /* Dummy - no press */
-
-    data->enc_diff = diff - last_diff;;
-    data->state = LV_INDEV_STATE_REL;
-
+    int32_t diff = (int32_t)floor(encoder.getCount() / 2.0);
+    data->state = (not(digitalRead(buttonPin)) ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL);
+    data->enc_diff = diff - last_diff;
     last_diff = diff;
 }
+
+void TECbtn_event_cb(lv_event_t * e)
+{
+  Serial.println("Toggled - TEC");
+  TECStatus = not(TECStatus);
+  if(TECStatus){
+    lv_label_set_text(TEClabel, "TEC: ON");
+  }
+  else{
+    lv_label_set_text(TEClabel, "TEC: OFF");
+  }
+  digitalWrite(TECpin, TECStatus);
+}
+
+//void focus_cb(lv_group_t * group) {
+//  // Get the pointer to the focused object
+//  static lv_obj_t * oldFocused = NULL; //static makes variable persistent
+//  lv_obj_t * newFocused = lv_group_get_focused(group);
+//  // Avoid a refocus loop
+//  if (newFocused != oldFocused) {
+//    // Page is a grandparent to the focused object
+//    lv_page_focus(lv_obj_get_parent(lv_obj_get_parent(newFocused)), newFocused, LV_ANIM_ON);
+//  }
+//  oldFocused = newFocused;
+//}
 
 void setup()
 {
     lv_init();
     Serial.begin( 115200 ); /* prepare for possible serial debug */
+    pinMode(TECpin, OUTPUT);
+    pinMode(buttonPin, INPUT);
+    
+    ESP32Encoder::useInternalWeakPullResistors = UP;
+    // Attache pins for use as encoder pins
+    encoder.attachHalfQuad(encoderPinA, encoderPinB);
 
     String LVGL_Arduino = "Hello Arduino! ";
     LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
@@ -102,32 +105,54 @@ void setup()
     lv_disp_draw_buf_init( &draw_buf, buf, NULL, screenWidth * 10 );
 
     /*Initialize the display*/
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init( &disp_drv );
-    /*Change the following line to your display resolution*/
-    disp_drv.hor_res = screenWidth;
-    disp_drv.ver_res = screenHeight;
-    disp_drv.flush_cb = my_disp_flush;
-    disp_drv.draw_buf = &draw_buf;
+    static lv_disp_drv_t disp_drv;              /*Descriptor of a display driver*/
+    lv_disp_drv_init( &disp_drv );              /*Basic initialization*/
+    disp_drv.hor_res = screenWidth;             /*Screen horizontal resolution*/
+    disp_drv.ver_res = screenHeight;            /*Screen vertical resolution*/
+    disp_drv.flush_cb = my_disp_flush;          /*Set your driver function*/
+    disp_drv.draw_buf = &draw_buf;              /*Assign the buffer to the display*/
     lv_disp_t * disp;
-    disp = lv_disp_drv_register( &disp_drv );
+    disp = lv_disp_drv_register( &disp_drv );   /*Finally register the driver*/
     lv_disp_drv_register( &disp_drv );
+//  This together with tft.setRotation allows to correctly display in horizontal mode.
     lv_disp_set_rotation( disp, LV_DISP_ROT_90 );
 
     /*Initialize the (dummy) input device driver*/
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init( &indev_drv );
-    indev_drv.type = LV_INDEV_TYPE_ENCODER;
-    indev_drv.read_cb = read_encoder;
-    lv_indev_drv_register( &indev_drv );
+    static lv_indev_drv_t indev_drv;            /*Descriptor of a input device driver*/
+    lv_indev_drv_init( &indev_drv );            /*Basic initialization*/
+    indev_drv.type = LV_INDEV_TYPE_ENCODER;     /*Encoder is a Encoder-like device*/
+    indev_drv.read_cb = read_encoder;           /*Set your driver function*/
+    lv_indev_t *indev = lv_indev_drv_register( &indev_drv );        /*Finally register the driver*/
 
-    /* Create simple label */
-    lv_obj_t *label = lv_label_create( lv_scr_act() );
-    lv_label_set_text( label, LVGL_Arduino.c_str() );
-    lv_obj_align( label, LV_ALIGN_CENTER, 0, 0 );
+    /*Create cont_col as a container for widgets*/
+    lv_obj_t * cont_col = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(cont_col, screenHeight, screenWidth); /*The page will take full screen*/
+    lv_obj_align(cont_col, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_flex_flow(cont_col, LV_FLEX_FLOW_COLUMN);
 
-    tft.fillScreen(TFT_BLACK);
+    lv_obj_t * TECbtn = lv_btn_create(cont_col);     /*Add a button to the current screen*/
+    lv_obj_set_size(TECbtn, LV_PCT(100), LV_SIZE_CONTENT );                          /*Set its size*/
+    lv_obj_add_event_cb(TECbtn, TECbtn_event_cb, LV_EVENT_CLICKED, NULL);                 /*Assign a callback to the button*/                  
+    lv_obj_add_flag(TECbtn, LV_OBJ_FLAG_CHECKABLE);           /*Make button checkable*/
+    TEClabel = lv_label_create(TECbtn);          /*Add a label to the button*/
+    lv_label_set_text(TEClabel, "TEC: OFF");                     /*Set the labels text*/
+    lv_obj_align_to(TEClabel, TECbtn, LV_ALIGN_CENTER, 0, 0);
+
+//    /* Create simple label */
+//    lv_obj_t *label = lv_label_create( cont_col );
+//    lv_label_set_text( label, LVGL_Arduino.c_str() );
+//    lv_obj_align_to( label, cont_col, LV_ALIGN_CENTER, 0, 0 );
+
     Serial.println( "Setup done" );
+
+    lv_group_t * g = lv_group_create();
+// Focus callback makes sure that focused object is visible
+    lv_group_set_focus_cb(g, NULL);
+// Add all the buttons and sliders to the group to control them
+    lv_group_add_obj(g, TECbtn);
+
+// Set the encoder as the input device for the group
+    lv_indev_set_group(indev, g);
 }
 
 void loop()
