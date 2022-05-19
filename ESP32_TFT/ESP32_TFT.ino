@@ -23,9 +23,18 @@ const int TECpin    = 21;
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight); /* TFT instance */
 
 static lv_obj_t * TEClabel;
+static lv_obj_t * reported_temp_label;
+static lv_obj_t * secondary_temp_label;
+static lv_obj_t * target_temp_slider_label;
+static lv_obj_t * base_temp_label;
+static lv_obj_t * reported_target_temp_label;
+static lv_obj_t * web_label;
 
 /* Global variables */
+static int WG_temp_limit_low = 10;
+static int WG_temp_limit_high = 90;
 static bool TECStatus = false;
+static bool web_status = true;
 
 /* Display flushing */
 void my_disp_flush( lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p )
@@ -62,6 +71,28 @@ void TECbtn_event_cb(lv_event_t * e)
     lv_label_set_text(TEClabel, "TEC: OFF");
   }
   digitalWrite(TECpin, TECStatus);
+}
+
+void web_btn_event_cb(lv_event_t * e)
+{
+  Serial.println("Toggled - WEB");
+  web_status = not(web_status);
+  if(web_status){
+    lv_label_set_text(web_label, "WEB: ON");
+  }
+  else{
+    lv_label_set_text(web_label, "WEB: OFF");
+  }
+//  digitalWrite(TECpin, TECStatus);
+}
+
+static void target_temp_slider_event_cb(lv_event_t * e)
+{
+    lv_obj_t * target_temp_slider = lv_event_get_target(e);
+    char buf[24];
+    lv_snprintf(buf, sizeof(buf), "Target WG temp: %d C", (int)lv_slider_get_value(target_temp_slider));
+    lv_label_set_text(target_temp_slider_label, buf);
+//    lv_obj_align_to(target_temp_slider_label, slider, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
 }
 
 //void focus_cb(lv_group_t * group) {
@@ -130,14 +161,85 @@ void setup()
     lv_obj_align(cont_col, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_flex_flow(cont_col, LV_FLEX_FLOW_COLUMN);
 
+    /* TEC engage indicator */
     lv_obj_t * TECbtn = lv_btn_create(cont_col);     /*Add a button to the current screen*/
     lv_obj_set_size(TECbtn, LV_PCT(100), LV_SIZE_CONTENT );                          /*Set its size*/
     lv_obj_add_event_cb(TECbtn, TECbtn_event_cb, LV_EVENT_CLICKED, NULL);                 /*Assign a callback to the button*/                  
     lv_obj_add_flag(TECbtn, LV_OBJ_FLAG_CHECKABLE);           /*Make button checkable*/
+    lv_obj_add_flag(TECbtn, LV_OBJ_FLAG_CLICK_FOCUSABLE );
+    lv_obj_add_flag(TECbtn, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );  
     TEClabel = lv_label_create(TECbtn);          /*Add a label to the button*/
     lv_label_set_text(TEClabel, "TEC: OFF");                     /*Set the labels text*/
     lv_obj_align_to(TEClabel, TECbtn, LV_ALIGN_CENTER, 0, 0);
 
+    /* WG reported temp indicator */
+    reported_temp_label = lv_label_create(cont_col);
+    lv_label_set_text(reported_temp_label, "Reported WG temp: 65 C");
+    lv_obj_t * reported_temp_bar =  lv_bar_create(cont_col);
+    lv_obj_set_size(reported_temp_bar, LV_PCT(100), 15 );
+    lv_obj_center(reported_temp_bar);
+    lv_bar_set_value(reported_temp_bar, 65, LV_ANIM_OFF);
+    lv_bar_set_range(reported_temp_bar, WG_temp_limit_low, WG_temp_limit_high);
+    lv_obj_add_flag(reported_temp_bar, LV_OBJ_FLAG_CLICK_FOCUSABLE );
+    lv_obj_add_flag(reported_temp_bar, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );
+
+    /* WG secondary temp indicator */
+    secondary_temp_label = lv_label_create(cont_col);
+    lv_label_set_text(secondary_temp_label, "Reported WG temp: 65 C");
+    lv_obj_t * secondary_temp_bar =  lv_bar_create(cont_col);
+    lv_obj_set_size(secondary_temp_bar, LV_PCT(100), 15 );
+    lv_obj_center(secondary_temp_bar);
+    lv_bar_set_value(secondary_temp_bar, 65, LV_ANIM_OFF);
+    lv_bar_set_range(secondary_temp_bar, WG_temp_limit_low, WG_temp_limit_high);
+    lv_obj_add_flag(secondary_temp_bar, LV_OBJ_FLAG_CLICK_FOCUSABLE );
+    lv_obj_add_flag(secondary_temp_bar, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );
+
+    /* WG temp control */
+    target_temp_slider_label = lv_label_create(cont_col);
+    lv_label_set_text(target_temp_slider_label, "Target WG temp: 25 C");
+    lv_obj_t * target_temp_slider = lv_slider_create(cont_col);
+    lv_obj_set_size(target_temp_slider, LV_PCT(100), 15 );
+    lv_slider_set_range(target_temp_slider, WG_temp_limit_low, WG_temp_limit_high);
+    lv_slider_set_value(target_temp_slider, 25, LV_ANIM_OFF);
+//    lv_obj_center(target_temp_slider);
+    lv_obj_add_event_cb(target_temp_slider, target_temp_slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_flag(target_temp_slider, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );
+
+    /* Base temperature indicator */
+    base_temp_label = lv_label_create(cont_col);
+    lv_label_set_text(base_temp_label, "Current base temp: 25 C");
+    lv_obj_t * base_temp_bar =  lv_bar_create(cont_col);
+    lv_obj_set_size(base_temp_bar, LV_PCT(100), 15 );
+    lv_obj_center(base_temp_bar);
+    lv_bar_set_value(base_temp_bar, 25, LV_ANIM_OFF);
+    lv_bar_set_range(base_temp_bar, 0, 100);
+    lv_obj_add_flag(base_temp_bar, LV_OBJ_FLAG_CLICK_FOCUSABLE );
+    lv_obj_add_flag(base_temp_bar, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );
+
+    /* WG reported target temp indicator */
+    reported_target_temp_label = lv_label_create(cont_col);
+    lv_label_set_text(reported_target_temp_label, "Reported target WG temp: 65 C");
+    lv_obj_t * reported_target_temp_bar =  lv_bar_create(cont_col);
+    lv_obj_set_size(reported_target_temp_bar, LV_PCT(100), 15 );
+    lv_obj_center(reported_target_temp_bar);
+    lv_bar_set_value(reported_target_temp_bar, 65, LV_ANIM_OFF);
+    lv_bar_set_range(reported_target_temp_bar, WG_temp_limit_low, WG_temp_limit_high);
+    lv_obj_add_flag(reported_target_temp_bar, LV_OBJ_FLAG_CLICK_FOCUSABLE );
+    lv_obj_add_flag(reported_target_temp_bar, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );
+
+    /* Web server engage indicator */
+    lv_obj_t * web_btn = lv_btn_create(cont_col);     /*Add a button to the current screen*/
+    lv_obj_set_size(web_btn, LV_PCT(100), LV_SIZE_CONTENT );                          /*Set its size*/
+    lv_obj_add_event_cb(web_btn, web_btn_event_cb, LV_EVENT_CLICKED, NULL);                 /*Assign a callback to the button*/                  
+    lv_obj_add_flag(web_btn, LV_OBJ_FLAG_CHECKABLE);           /*Make button checkable*/
+    lv_obj_add_flag(web_btn, LV_OBJ_FLAG_CLICK_FOCUSABLE );
+    lv_obj_add_flag(web_btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS  );  
+    web_label = lv_label_create(web_btn);          /*Add a label to the button*/
+    lv_label_set_text(web_label, "WEB: ON");                     /*Set the labels text*/
+    lv_obj_align_to(web_label, web_btn, LV_ALIGN_CENTER, 0, 0);
+
+//    lv_obj_align_to(slider_label, slider, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    
 //    /* Create simple label */
 //    lv_obj_t *label = lv_label_create( cont_col );
 //    lv_label_set_text( label, LVGL_Arduino.c_str() );
@@ -150,6 +252,11 @@ void setup()
     lv_group_set_focus_cb(g, NULL);
 // Add all the buttons and sliders to the group to control them
     lv_group_add_obj(g, TECbtn);
+    lv_group_add_obj(g, reported_temp_bar);
+    lv_group_add_obj(g, target_temp_slider);
+    lv_group_add_obj(g, base_temp_bar);
+    lv_group_add_obj(g, reported_target_temp_bar);
+    lv_group_add_obj(g, web_btn);
 
 // Set the encoder as the input device for the group
     lv_indev_set_group(indev, g);
