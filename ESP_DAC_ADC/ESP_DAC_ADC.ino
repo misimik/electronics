@@ -47,6 +47,9 @@ void device_check(){
 
 ADS1115 ADS(0x48); // Initialize ADC - ADS1115
 MCP4725 MCP(0x60); // Initialize DAC - MCP4725
+static const int tec_pin = 33;
+static bool tec_status = false;
+
 
 
 
@@ -54,6 +57,9 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin( 115200 );
   Wire.begin();
+  pinMode( tec_pin, OUTPUT );
+
+  digitalWrite( tec_pin, tec_status );
   Serial.println( "Temp 15 C" );
   Serial.print("Resistance: "); Serial.println( temp_to_resistance( 15., 10000., 25., 3450. ) );
   Serial.print("Temp: "); Serial.println( resistance_to_temp( 20000., 10000., 25., 3450. ) );
@@ -67,6 +73,9 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
+
+  tec_status = not( tec_status );
+  digitalWrite( tec_pin, tec_status );
 
   float f = ADS.toVoltage(1); // Voltage factor: 1 means that it measures the voltage has no addtional scaling.
   float voltage_0 = ADS.readADC(0)*f;
