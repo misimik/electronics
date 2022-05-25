@@ -2,25 +2,29 @@
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <ESP32Encoder.h>
+#include <Wire.h>
+#include "ADS1X15.h"
+#include "MCP4725.h"
 /* LVGL library might have breaking changes in updates.
  *  Make sure that the the code is in agreement with current
  *  display and input device porting requirements
 */
 
-/*Change to your screen resolution*/
-static const uint16_t screenWidth  = 135;
-static const uint16_t screenHeight = 240;
-
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf[ screenWidth * 10 ];
-
 ESP32Encoder encoder;
 const int buttonPin = 33;
 const int encoderPinA = 2;
 const int encoderPinB = 15;
-const int TECpin    = 21;
+const int TECpin    = 32;
+ADS1115 ADS(0x48); // Initialize ADC - ADS1115
+MCP4725 MCP(0x60); // Initialize DAC - MCP4725
 
+
+/*Change to your screen resolution*/
+static const uint16_t screenWidth  = 135;
+static const uint16_t screenHeight = 240;
 TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight); /* TFT instance */
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t buf[ screenWidth * 10 ];
 
 static lv_obj_t * TEClabel;
 static lv_obj_t * reported_temp_label;
@@ -33,8 +37,34 @@ static lv_obj_t * web_label;
 /* Global variables */
 static int WG_temp_limit_low = 10;
 static int WG_temp_limit_high = 90;
-static bool TECStatus = false;
+static bool tec_status = false;
 static bool web_status = true;
+static float target_temp = 25;
+
+float temp_to_resistance(float temp, float ref_resistance, float ref_temp, float beta){
+  return ref_resistance * exp( beta * ( (1/( temp + 273. ) ) - ( 1/( ref_temp + 273. ) ) ));
+}
+
+float resistance_to_temp( float resistance, float ref_resistance, float ref_temp, float beta ){
+  return 1/( 1/( ref_temp + 273. ) + 1/beta*log( resistance / ref_resistance ) ) - 273.;
+}
+
+float voltage_to_resistance( float voltage, float ref_voltage, float ref_resistance ){
+  /* This is for the voltage divider.
+  The voltage is measured across  the changing resistance */
+  return ref_resistance / ( ref_voltage - voltage ) * voltage;
+}
+
+float resistance_to_voltage( float resistance ){
+  /* This is for the Wavelength Electronics PTC10K-CH
+     Here a 100 uA current is pushed through the thermistor
+     and the voltage drop must be equal to the controlling voltage*/
+  return resistance / 10000.;
+}
+
+void update_temperature(){
+  
+}
 
 /* Display flushing */
 void my_disp_flush( lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p )
@@ -63,14 +93,14 @@ void read_encoder(lv_indev_drv_t * indev, lv_indev_data_t * data)
 void TECbtn_event_cb(lv_event_t * e)
 {
   Serial.println("Toggled - TEC");
-  TECStatus = not(TECStatus);
-  if(TECStatus){
+  tec_status = not(tec_status);
+  if(tec_status){
     lv_label_set_text(TEClabel, "TEC: ON");
   }
   else{
     lv_label_set_text(TEClabel, "TEC: OFF");
   }
-  digitalWrite(TECpin, TECStatus);
+  digitalWrite(TECpin, tec_status);
 }
 
 void web_btn_event_cb(lv_event_t * e)
@@ -83,7 +113,7 @@ void web_btn_event_cb(lv_event_t * e)
   else{
     lv_label_set_text(web_label, "WEB: OFF");
   }
-//  digitalWrite(TECpin, TECStatus);
+//  digitalWrite(TECpin, tec_status);
 }
 
 static void target_temp_slider_event_cb(lv_event_t * e)
@@ -111,12 +141,17 @@ void setup()
 {
     lv_init();
     Serial.begin( 115200 ); /* prepare for possible serial debug */
+    Wire.begin();
     pinMode(TECpin, OUTPUT);
     pinMode(buttonPin, INPUT);
     
     ESP32Encoder::useInternalWeakPullResistors = UP;
     // Attache pins for use as encoder pins
     encoder.attachHalfQuad(encoderPinA, encoderPinB);
+
+    ADS.setGain(1); // Gain 0: +/- 6V; Gain 1: +/- 4V
+    MCP.begin();
+    MCP.writeDAC( 4095/3.3 * resistance_to_voltage( temp_to_resistance( 25, 10000, 25, 3450 ) ), true );
 
     String LVGL_Arduino = "Hello Arduino! ";
     LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
