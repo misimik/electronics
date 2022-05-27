@@ -15,8 +15,8 @@ const int buttonPin = 33;
 const int encoderPinA = 2;
 const int encoderPinB = 15;
 const int TECpin    = 32;
-ADS1115 ADS(0x48); // Initialize ADC - ADS1115
-MCP4725 MCP(0x60); // Initialize DAC - MCP4725
+static ADS1115 ADS(0x48); // Initialize ADC - ADS1115
+static MCP4725 MCP(0x60); // Initialize DAC - MCP4725
 
 
 /*Change to your screen resolution*/
@@ -33,6 +33,10 @@ static lv_obj_t * target_temp_slider_label;
 static lv_obj_t * base_temp_label;
 static lv_obj_t * reported_target_temp_label;
 static lv_obj_t * web_label;
+static lv_obj_t * secondary_temp_bar;
+static lv_obj_t * base_temp_bar;
+static lv_obj_t * reported_temp_bar;
+static lv_obj_t * reported_target_temp_bar;
 
 /* Global variables */
 static int WG_temp_limit_low = 10;
@@ -62,8 +66,58 @@ float resistance_to_voltage( float resistance ){
   return resistance / 10000.;
 }
 
-void update_temperature(){
+void update_target_temp(float target_temp){
+//  Thermistor No. 0: R = 9977, T0 = 24.95, beta = 3464
+  float target_res = temp_to_resistance( target_temp, 9977, 24.95, 3464. );
+  float target_volt = resistance_to_voltage( target_res );
+//  4095 levels of 12bit MCP4725 and 3.3 V of the reference voltage (ESP32 LDO)
+  MCP.setValue( 4095/3.3 * target_volt );
+}
+
+void update_measured_temps(lv_timer_t * timer){
+  float f = ADS.toVoltage(1);
+  float volt_0 = ADS.readADC(0)*f;
+  float volt_1 = ADS.readADC(1)*f;
+  float volt_2 = ADS.readADC(2)*f;
+  float volt_3 = ADS.readADC(3)*f;
+//  Ref voltage: ESP32 LDO = 3.3 V
+//  Resistor 1 = 9.86 k Ohm
+//  Resistor 2 = 9.91 k Ohm
+  float res_0 = volt_0 * 10000;
+  float res_1 = voltage_to_resistance( volt_1, 3.3, 9860 );
+  float res_2 = voltage_to_resistance( volt_1, 3.3, 9910 );
+  float res_3 = volt_3 * 10000;
+//  Thermistor 0: T = 9977, T0 = 24.95, beta = 3464
+//  Thermistor 2: R = 9962, T0 = 24.89, beta = 3424
+//  Thermistor 4: R = 9943, T0 = 24.84, beta = 3450
+  float temp_0 = resistance_to_temp( res_0, 9977., 24.95, 3464. );
+  float temp_1 = resistance_to_temp( res_1, 9962., 24.89, 3424. );
+  float temp_2 = resistance_to_temp( res_2, 9943., 24.84, 3450. );
+//  Also uses Thermistor 0
+  float temp_3 = resistance_to_temp( res_3, 9977., 24.95, 3464. );
+
+  char buf2[24];
+
+  lv_snprintf(buf2, sizeof(buf2), "Reported WG temp: %d C", (int)temp_0 );
+  lv_label_set_text(reported_temp_label, buf2);
+  lv_bar_set_value(reported_temp_bar, (int)temp_0, LV_ANIM_OFF);
   
+  lv_snprintf(buf2, sizeof(buf2), "Secondary WG temp: %d C", (int)temp_1 );
+  lv_label_set_text(secondary_temp_label, buf2);
+  lv_bar_set_value(secondary_temp_bar, (int)temp_1, LV_ANIM_OFF);
+
+  lv_snprintf(buf2, sizeof(buf2), "Current base temp: %d C", (int)temp_2 );
+  lv_label_set_text(base_temp_label, buf2);
+  lv_bar_set_value(base_temp_bar, (int)temp_2, LV_ANIM_OFF);  
+
+  lv_snprintf(buf2, sizeof(buf2), "Rep. targ. WG temp: %d C", (int)temp_3 );
+  lv_label_set_text(reported_target_temp_label, buf2);
+  lv_bar_set_value(reported_target_temp_bar, (int)temp_3, LV_ANIM_OFF);  
+
+  Serial.print( "Reported Temp:\t" ); Serial.println( temp_0 );
+  Serial.print( "Secondary Temp:\t" ); Serial.println( temp_1 );
+  Serial.print( "Base Temp:\t" ); Serial.println( temp_2 );
+  Serial.print( "Reported target Temp:\t" ); Serial.println( temp_3 );
 }
 
 /* Display flushing */
@@ -120,8 +174,11 @@ static void target_temp_slider_event_cb(lv_event_t * e)
 {
     lv_obj_t * target_temp_slider = lv_event_get_target(e);
     char buf[24];
-    lv_snprintf(buf, sizeof(buf), "Target WG temp: %d C", (int)lv_slider_get_value(target_temp_slider));
+    target_temp = lv_slider_get_value(target_temp_slider);
+    lv_snprintf(buf, sizeof(buf), "Target WG temp: %d C", (int)target_temp );
     lv_label_set_text(target_temp_slider_label, buf);
+    update_target_temp( target_temp );
+    
 //    lv_obj_align_to(target_temp_slider_label, slider, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
 }
 
@@ -210,7 +267,7 @@ void setup()
     /* WG reported temp indicator */
     reported_temp_label = lv_label_create(cont_col);
     lv_label_set_text(reported_temp_label, "Reported WG temp: 65 C");
-    lv_obj_t * reported_temp_bar =  lv_bar_create(cont_col);
+    reported_temp_bar =  lv_bar_create(cont_col);
     lv_obj_set_size(reported_temp_bar, LV_PCT(100), 15 );
     lv_obj_center(reported_temp_bar);
     lv_bar_set_value(reported_temp_bar, 65, LV_ANIM_OFF);
@@ -220,8 +277,8 @@ void setup()
 
     /* WG secondary temp indicator */
     secondary_temp_label = lv_label_create(cont_col);
-    lv_label_set_text(secondary_temp_label, "Reported WG temp: 65 C");
-    lv_obj_t * secondary_temp_bar =  lv_bar_create(cont_col);
+    lv_label_set_text(secondary_temp_label, "Secondary WG temp: 65 C");
+    secondary_temp_bar =  lv_bar_create(cont_col);
     lv_obj_set_size(secondary_temp_bar, LV_PCT(100), 15 );
     lv_obj_center(secondary_temp_bar);
     lv_bar_set_value(secondary_temp_bar, 65, LV_ANIM_OFF);
@@ -243,7 +300,7 @@ void setup()
     /* Base temperature indicator */
     base_temp_label = lv_label_create(cont_col);
     lv_label_set_text(base_temp_label, "Current base temp: 25 C");
-    lv_obj_t * base_temp_bar =  lv_bar_create(cont_col);
+    base_temp_bar =  lv_bar_create(cont_col);
     lv_obj_set_size(base_temp_bar, LV_PCT(100), 15 );
     lv_obj_center(base_temp_bar);
     lv_bar_set_value(base_temp_bar, 25, LV_ANIM_OFF);
@@ -253,8 +310,8 @@ void setup()
 
     /* WG reported target temp indicator */
     reported_target_temp_label = lv_label_create(cont_col);
-    lv_label_set_text(reported_target_temp_label, "Reported target WG temp: 65 C");
-    lv_obj_t * reported_target_temp_bar =  lv_bar_create(cont_col);
+    lv_label_set_text(reported_target_temp_label, "Rep. targ. WG temp: 65 C");
+    reported_target_temp_bar =  lv_bar_create(cont_col);
     lv_obj_set_size(reported_target_temp_bar, LV_PCT(100), 15 );
     lv_obj_center(reported_target_temp_bar);
     lv_bar_set_value(reported_target_temp_bar, 65, LV_ANIM_OFF);
@@ -288,6 +345,7 @@ void setup()
 // Add all the buttons and sliders to the group to control them
     lv_group_add_obj(g, TECbtn);
     lv_group_add_obj(g, reported_temp_bar);
+    lv_group_add_obj(g, secondary_temp_bar);
     lv_group_add_obj(g, target_temp_slider);
     lv_group_add_obj(g, base_temp_bar);
     lv_group_add_obj(g, reported_target_temp_bar);
@@ -295,6 +353,10 @@ void setup()
 
 // Set the encoder as the input device for the group
     lv_indev_set_group(indev, g);
+
+// Timers - periodically called functions
+    static uint32_t user_data = 10;
+    lv_timer_t * timer_utt = lv_timer_create( update_measured_temps, 1000, NULL);
 }
 
 void loop()
